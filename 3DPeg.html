@@ -1,0 +1,297 @@
+﻿<!DOCTYPE html>
+<html>
+<!-- Copyright 2016 Kenichiro Tanaka -->
+<head>
+    <meta charset="utf-8" />
+    <title>3D Peg</title>
+    <script src="Tiny2D.js"></script>
+    <script>
+        "use strict";
+        var engine, ctx, keymap = [], cubes = [], images = [];
+        var timer, ball, sound, count = 0, rotY = 0, rotX = 1.2;
+        var ballImg, pin0Img, pin1Img;
+        var light = new Vec3(0.5, -0.8, -0.2).normalize();
+
+        function random(v) { return Math.floor(Math.random() * v) }
+
+        function Vec3(x, y, z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.normalize = function () {
+                var x = this.x, y = this.y, z = this.z;
+                var scale = 1 / Math.sqrt(x * x + y * y + z * z);
+                this.x *= scale;
+                this.y *= scale;
+                this.z *= scale;
+                return this;
+            }
+        }
+
+        function Surface(polygon, type) {
+            this.pos = polygon;
+            this.type = type;
+
+            var p1 = polygon[0];
+            var p2 = polygon[1];
+            var p3 = polygon[2];
+            var p = new Vec3(p1.x - p2.x, p1.y - p2.y, p1.z - p2.z);
+            var q = new Vec3(p1.x - p3.x, p1.y - p3.y, p1.z - p3.z);
+            var n = new Vec3(
+                p.y * q.z - p.z * q.y,
+                p.z * q.x - p.x * q.z,
+                p.x * q.y - p.y * q.x);
+            this.norm = n.normalize();
+            this.cZ = (p1.z + p2.z + p3.z) / 3;
+        }
+
+        function Cube(x, y, z, w, h, d, type) {
+            this.pos = [];
+            this.type = type;
+
+            this.vertices = [
+                { x: x - w, y: y - h, z: z + d },
+                { x: x - w, y: y + h, z: z + d },
+                { x: x + w, y: y + h, z: z + d },
+                { x: x + w, y: y - h, z: z + d },
+                { x: x - w, y: y - h, z: z - d },
+                { x: x - w, y: y + h, z: z - d },
+                { x: x + w, y: y + h, z: z - d },
+                { x: x + w, y: y - h, z: z - d },
+            ];
+
+            this.polygons = [
+                [2, 1, 5, 6],
+                [0, 1, 2, 3],
+                [4, 5, 1, 0],
+                [2, 6, 7, 3],
+                [7, 6, 5, 4],
+                [0, 3, 7, 4]
+            ];
+
+            this.getSurfaces = function () {
+                var r = [];
+                for (var i = 0 ; i < this.polygons.length ; i++) {
+                    var indices = this.polygons[i];
+                    var p = [];
+                    for (var j = 0 ; j < indices.length ; j++) {
+                        p.push(this.pos[indices[j]]);
+                    }
+                    if (this.type == "block" || (this.type != "block" && i == 4)) {
+                        r.push(new Surface(p, this.type));
+                    }
+                }
+                return r;
+            }
+
+            this.setCamera = function (cameraX, cameraY, cameraZ, mRotX, mRotY) {
+                for (var i = 0 ; i < this.vertices.length ; i++) {
+                    var c = this.vertices[i];
+
+                    // move the camera
+                    var x = c.x - cameraX;
+                    var y = c.y - cameraY;
+                    var z = c.z;
+
+                    // rotate around Y axis
+                    var p = mRotY[0] * x + mRotY[1] * y + mRotY[2] * z;
+                    var q = mRotY[3] * x + mRotY[4] * y + mRotY[5] * z;
+                    var r = mRotY[6] * x + mRotY[7] * y + mRotY[8] * z;
+
+                    // rotate around X axis
+                    x = mRotX[0] * p + mRotX[1] * q + mRotX[2] * r;
+                    y = mRotX[3] * p + mRotX[4] * q + mRotX[5] * r;
+                    z = mRotX[6] * p + mRotX[7] * q + mRotX[8] * r;
+
+                    this.pos[i] = { x: x, y: y, z: z - cameraZ };
+                }
+            }
+        }
+
+        function init() {
+            ballImg = document.getElementById("ballImg");
+            pin0Img = document.getElementById("pin0Img");
+            pin1Img = document.getElementById("pin1Img");
+            sound = new Audio("sound0.mp3");
+
+            ctx = document.getElementById("field").getContext("2d");
+            ctx.font = "20pt Arial";
+
+            engine = new Engine(-100, -100, 800, 1400, 0, 0);
+
+            var blocks = [{ x: 25, y: 600, w: 25, h: 600 },
+                { x: 575, y: 600, w: 25, h: 600 }];
+            blocks.forEach(function (c) {
+                cubes.push(new Cube(c.x, c.y, 0, c.w, c.h, 25, "block"));
+                var r = new RectangleEntity(c.x - c.w, c.y - c.h, c.w * 2, c.h * 2);
+                engine.entities.push(r);
+            })
+
+            images.push(new Cube(0, 0, 0, 15, 15, 15, "ball"));
+            ball = new CircleEntity(random(300) + 100, 1000, 15, BodyDynamic, 0.9);
+            engine.entities.push(ball);
+
+            for (var y = 0 ; y < 5 ; y++) {
+                for (var x = 0 ; x < 7 + y % 2 ; x++) {
+                    var xpos = x * 65 + ((y % 2) ? 70 : 100);
+                    var ypos = y * 150 + 100;
+                    var cube = new Cube(xpos, ypos, 0, 10, 10, 10, "pin0");
+                    images.push(cube);
+                    var pin = new CircleEntity(xpos, ypos, 10, BodyStatic, 0.8);
+                    pin.cube = cube;
+                    pin.onhit = function () {
+                        sound.play();
+                        if (this.cube.type == "pin0") {
+                            this.cube.type = "pin1";
+                            if (++count == 37) {
+                                clearInterval(timer);
+                                timer = NaN;
+                                paint();
+                            }
+                        }
+                    }
+                    engine.entities.push(pin);
+                }
+            }
+
+            onkeydown = function (e) { keymap[e.keyCode] = true; };
+            onkeyup = function (e) { keymap[e.keyCode] = false;}
+            timer = setInterval(tick, 25)
+        }
+
+        function tick() {
+            if (keymap[37]) { rotY -= 0.01; }  // left
+            if (keymap[39]) { rotY += 0.01; }  // right
+            if (keymap[38]) { rotX += 0.01; }  // up
+            if (keymap[40]) { rotX -= 0.01; }  // down
+
+            rotX = Math.max(1.0, Math.min(1.3, rotX));
+            rotY = Math.max(-0.5, Math.min(0.5, rotY));
+            engine.setGravity(-rotY * 20, -rotX * 5);
+            engine.step(0.01);
+
+            var c = Math.cos(rotY);
+            var s = Math.sin(rotY);
+            var MatrixRotY = [c, 0, s, 0, 1, 0, -s, 0, c];
+
+            var c = Math.cos(rotX);
+            var s = Math.sin(rotX);
+            var MatrixRotX = [1, 0, 0, 0, c, -s, 0, s, c];
+
+            cubes.forEach(function (b) {
+                b.setCamera(300, 300, -1500, MatrixRotX, MatrixRotY);
+            });
+            if (ball.y < 0 || ball.y > 1200) {
+                ball.x = random(300) + 100;
+                ball.y = 1000;
+            }
+            images[0] = new Cube(ball.x, ball.y, 0, 10, 10, 10, "ball");
+            images.forEach(function (b) {
+                b.setCamera(300, 300, -1500, MatrixRotX, MatrixRotY);
+            });
+
+            paint();
+        }
+
+        function paint() {
+            // clear background
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, 600, 600);
+
+            // get all surfaces and sort them
+            var surfaces = []
+            cubes.forEach(function (b) {
+                surfaces = surfaces.concat(b.getSurfaces());
+            });
+            surfaces.sort(function (a, b) {
+                return b.cZ - a.cZ;
+            });
+
+            // draw all surfaces
+            surfaces.forEach(function (s) {
+                var p = (s.norm.x * light.x + s.norm.y * light.y + s.norm.z * light.z);
+                var ratio = (p + 1) / 2;    // p: -1 to 1, ratio: 0 to 1
+                var rgb = Math.floor(255 * ratio);
+                ctx.fillStyle = "rgba(" + rgb + "," + rgb + "," + rgb + ",255)";
+
+                ctx.beginPath();
+                for (var i = 0 ; i < 4 ; i++) {
+                    var v = s.pos[i];
+                    if (v.z <= 0) continue;
+                    var x = v.x / v.z * 1200 + 300;
+                    var y = -v.y / v.z * 1200 + 300;
+                    if (i == 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.closePath();
+                ctx.fill();
+            })
+
+            // draw images
+            surfaces = [];
+            images.forEach(function (b) {
+                surfaces.push(b.getSurfaces()[0])
+            });
+            surfaces.sort(function (a, b) {
+                return b.cZ - a.cZ;
+            });
+            surfaces.forEach(function (s) {
+                var x = (s.pos[0].x + s.pos[3].x) / 2;
+                var y = (s.pos[0].y + s.pos[1].y) / 2;
+                var z = (s.pos[0].z);
+                var w = Math.abs(s.pos[3].x - s.pos[0].x);
+                var x = x / z * 1200 + 300;
+                var y = -y / z * 1200 + 300;
+                var img;
+                switch (s.type) {
+                    case "pin0": img = pin0Img; break;
+                    case "pin1": img = pin1Img; break;
+                    case "ball": img = ballImg; break;
+                }
+
+                ctx.save()
+                ctx.translate(x - w / 2, y - w / 2);
+                ctx.rotate(-rotY);
+                ctx.drawImage(img, 0, 0, w, w);
+                ctx.restore();
+            })
+
+            if (isNaN(timer)) {
+                ctx.fillStyle = "yellow";
+                ctx.fillText("GAME OVER", 220, 250);
+            }
+
+            /*
+            ctx.strokeStyle = "yellow";
+            ctx.save();
+            ctx.scale(0.5, -0.5);
+            ctx.translate(0, -1200);
+            engine.entities.forEach(function (e) {
+                switch (e.shape) {
+                    case ShapeRectangle:
+                        ctx.strokeRect(e.x, e.y, e.w, e.h);
+                        break;
+                    case ShapeCircle:
+                        ctx.beginPath();
+                        ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2)
+                        ctx.closePath();
+                        ctx.stroke();
+                        break;
+                }
+            })
+            ctx.restore();
+            */
+        }
+    </script>
+</head>
+<body onload="init()">
+    <canvas id="field" width="600" height="600" 
+            style="width:600px; height:600px"></canvas>
+    <img id="ballImg" src="ball.png" style="display:none" />
+    <img id="pin0Img" src="pin0.png" style="display:none" />
+    <img id="pin1Img" src="pin1.png" style="display:none" />
+</body>
+</html>
